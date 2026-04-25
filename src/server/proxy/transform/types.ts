@@ -48,14 +48,6 @@ export type OpenAIChatRequest = {
   tools?: OpenAITool[]
   tool_choice?: unknown
   reasoning_effort?: 'low' | 'medium' | 'high'
-  thinking?: {
-    type: string
-    budget_tokens?: number
-  }
-  reasoning_params?: {
-    max_tokens: number
-  }
-  extra_body?: Record<string, unknown>
 }
 
 export type OpenAIChatResponse = {

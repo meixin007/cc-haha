@@ -55,7 +55,7 @@ jobs:
           # Windows x64
           - platform: windows-latest
             rust_target: x86_64-pc-windows-msvc
-            tauri_args: '--bundles msi'
+            tauri_args: '--bundles nsis'
             label: Windows-x64
             asset_name_pattern: 'Claude-Code-Haha_[version]_windows_x64_[bundle][ext]'
 
@@ -176,6 +176,6 @@ jobs:
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
           prerelease: false
-          updaterJsonPreferNsis: false
+          updaterJsonPreferNsis: true
           releaseAssetNamePattern: ${{ matrix.asset_name_pattern }}
           args: ${{ matrix.tauri_args }} --config src-tauri/tauri.release-ci.json

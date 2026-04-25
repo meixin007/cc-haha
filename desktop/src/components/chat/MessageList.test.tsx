@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MessageList, buildRenderModel } from './MessageList'
 import { sessionsApi } from '../../api/sessions'
 import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
 import type { UIMessage } from '../../types/chat'
 import type { PerSessionState } from '../../stores/chatStore'
@@ -35,6 +36,7 @@ function makeSessionState(overrides: Partial<PerSessionState> = {}): PerSessionS
 describe('MessageList nested tool calls', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
+    useSettingsStore.setState({ locale: 'en' })
     useTabStore.setState({ activeTabId: ACTIVE_TAB, tabs: [{ sessionId: ACTIVE_TAB, title: 'Test', type: 'session' as const, status: 'idle' }] })
     useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState() } })
   })
@@ -336,6 +338,122 @@ describe('MessageList nested tool calls', () => {
     expect(writeText).not.toHaveBeenCalledWith(
       '先看 CLI 和服务端入口。\n再看 desktop 前后端边界。'
     )
+  })
+
+  it('does not force-scroll to the bottom while the user is reading history', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'streaming',
+          messages: [
+            {
+              id: 'user-1',
+              type: 'user_text',
+              content: '历史消息',
+              timestamp: 1,
+            },
+          ],
+          streamingText: 'streaming',
+        }),
+      },
+    })
+
+    const { container } = render(<MessageList />)
+    const scroller = container.querySelector('.overflow-y-auto') as HTMLDivElement
+    let scrollTop = 120
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value
+      },
+    })
+
+    scrollIntoView.mockClear()
+    fireEvent.scroll(scroller)
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [ACTIVE_TAB]: {
+            ...state.sessions[ACTIVE_TAB]!,
+            streamingText: 'streaming new token',
+          },
+        },
+      }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('streaming new token')).toBeTruthy()
+    })
+    expect(scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('keeps auto-scrolling when new output arrives while already near the bottom', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    })
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'streaming',
+          messages: [
+            {
+              id: 'user-1',
+              type: 'user_text',
+              content: '最新消息',
+              timestamp: 1,
+            },
+          ],
+          streamingText: 'streaming',
+        }),
+      },
+    })
+
+    const { container } = render(<MessageList />)
+    const scroller = container.querySelector('.overflow-y-auto') as HTMLDivElement
+    let scrollTop = 552
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 1000 })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = value
+      },
+    })
+
+    scrollIntoView.mockClear()
+    fireEvent.scroll(scroller)
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [ACTIVE_TAB]: {
+            ...state.sessions[ACTIVE_TAB]!,
+            streamingText: 'streaming next token',
+          },
+        },
+      }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('streaming next token')).toBeTruthy()
+    })
+    expect(scrollIntoView).toHaveBeenCalled()
   })
 
   it('keeps user actions anchored to the right bubble and assistant actions to the left bubble', () => {

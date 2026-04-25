@@ -87,3 +87,11 @@ export function resolveModelCapabilities(
     supportsInterleavedThinking: declared?.supportsInterleavedThinking ?? preset.supportsInterleavedThinking,
   }
 }
+
+/**
+ * Get model capabilities for proxy requests.
+ * This is used by the proxy handler to determine thinking strategy.
+ */
+export function getProxyModelCapabilities(modelId: string): ModelCapabilities | undefined {
+  return resolveModelCapabilities(modelId)
+}

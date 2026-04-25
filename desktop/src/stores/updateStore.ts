@@ -191,11 +191,12 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
 
     try {
       writeDismissedUpdateVersion(null)
+      const { invoke } = await import('@tauri-apps/api/core')
       const { relaunch } = await import('@tauri-apps/plugin-process')
       let totalBytes: number | null = null
       let downloadedBytes = 0
 
-      await update.downloadAndInstall((event) => {
+      await update.download((event) => {
         if (event.event === 'Started') {
           totalBytes = event.data.contentLength ?? null
           downloadedBytes = 0
@@ -225,6 +226,9 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
           }))
         }
       })
+
+      await invoke('prepare_for_update_install')
+      await update.install()
 
       set((state) => ({
         ...state,

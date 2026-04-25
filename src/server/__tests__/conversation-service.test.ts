@@ -229,7 +229,9 @@ describe('ConversationService', () => {
 
     if (process.platform === 'win32') {
       expect(args[0]).toBe(process.execPath)
-      expect(args[1]).toContain(path.join('src', 'entrypoints', 'cli.tsx'))
+      expect(args[1]).toBe('--preload')
+      expect(args[2]).toContain('preload.ts')
+      expect(args[3]).toContain(path.join('src', 'entrypoints', 'cli.tsx'))
     } else {
       expect(args[0]).toContain(path.join('bin', 'claude-haha'))
     }

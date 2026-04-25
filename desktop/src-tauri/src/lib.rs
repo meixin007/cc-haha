@@ -113,6 +113,22 @@ fn restart_adapters_sidecar(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn prepare_for_update_install(app: AppHandle) -> Result<(), String> {
+    stop_server_sidecar(&app);
+    stop_adapters_sidecar(&app);
+
+    #[cfg(target_os = "windows")]
+    {
+        kill_windows_sidecars();
+    }
+
+    // Give Windows a short moment to release executable file handles before the
+    // updater starts replacing bundled sidecars in the install directory.
+    std::thread::sleep(Duration::from_millis(750));
+    Ok(())
+}
+
+#[tauri::command]
 fn terminal_spawn(
     app: AppHandle,
     state: State<'_, TerminalState>,
@@ -721,6 +737,21 @@ fn stop_adapters_sidecar(app: &AppHandle) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn kill_windows_sidecars() {
+    for image_name in [
+        "claude-sidecar-x86_64-pc-windows-msvc.exe",
+        "claude-sidecar-aarch64-pc-windows-msvc.exe",
+        "claude-sidecar.exe",
+    ] {
+        let _ = StdCommand::new("taskkill")
+            .args(["/F", "/T", "/IM", image_name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{decode_terminal_output, default_utf8_locale, ensure_utf8_locale, parse_env_block};
@@ -817,6 +848,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_server_url,
             restart_adapters_sidecar,
+            prepare_for_update_install,
             terminal_spawn,
             terminal_write,
             terminal_resize,

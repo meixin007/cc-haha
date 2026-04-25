@@ -25,7 +25,6 @@ import type {
   ProviderTestStepResult,
   ApiFormat,
 } from '../types/provider.js'
-import { resolveModelCapabilities } from './proxyModelCapabilities.js'
 
 const MANAGED_ENV_KEYS = [
   'ANTHROPIC_BASE_URL',
@@ -152,7 +151,6 @@ export class ProviderService {
       apiFormat: input.apiFormat ?? 'anthropic',
       models: input.models,
       ...(input.notes !== undefined && { notes: input.notes }),
-      ...(input.modelCapabilities !== undefined && { modelCapabilities: input.modelCapabilities }),
     }
 
     index.providers.push(provider)
@@ -174,7 +172,6 @@ export class ProviderService {
       ...(input.apiFormat !== undefined && { apiFormat: input.apiFormat }),
       ...(input.models !== undefined && { models: input.models }),
       ...(input.notes !== undefined && { notes: input.notes }),
-      ...(input.modelCapabilities !== undefined && { modelCapabilities: input.modelCapabilities }),
     }
 
     index.providers[idx] = updated
@@ -236,7 +233,7 @@ export class ProviderService {
       ? `http://127.0.0.1:${ProviderService.serverPort}${proxyPath}`
       : provider.baseUrl
 
-    const env: Record<string, string> = {
+    return {
       ANTHROPIC_BASE_URL: baseUrl,
       ANTHROPIC_API_KEY: needsProxy ? 'proxy-managed' : provider.apiKey,
       ANTHROPIC_MODEL: provider.models.main,
@@ -244,22 +241,6 @@ export class ProviderService {
       ANTHROPIC_DEFAULT_SONNET_MODEL: provider.models.sonnet,
       ANTHROPIC_DEFAULT_OPUS_MODEL: provider.models.opus,
     }
-
-    // Inject model capability overrides for the compact system.
-    // The CLI's getContextWindowForModel / getMaxOutputTokensForModel
-    // already respect CLAUDE_CODE_MAX_CONTEXT_TOKENS and
-    // CLAUDE_CODE_MAX_OUTPUT_TOKENS env vars.
-    if (needsProxy) {
-      const caps = resolveModelCapabilities(provider.models.main, provider.modelCapabilities)
-      if (caps.contextWindow) {
-        env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(caps.contextWindow)
-      }
-      if (caps.maxOutputTokens) {
-        env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = String(caps.maxOutputTokens)
-      }
-    }
-
-    return env
   }
 
   async getProviderRuntimeEnv(id: string): Promise<Record<string, string>> {
@@ -352,7 +333,6 @@ export class ProviderService {
     baseUrl: string
     apiKey: string
     apiFormat: ApiFormat
-    modelCapabilities?: import('../types/provider.js').ModelCapabilities
   } | null> {
     if (providerId) {
       const provider = await this.getProvider(providerId)
@@ -360,7 +340,6 @@ export class ProviderService {
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         apiFormat: provider.apiFormat ?? 'anthropic',
-        modelCapabilities: provider.modelCapabilities,
       }
     }
 
@@ -372,7 +351,6 @@ export class ProviderService {
       baseUrl: provider.baseUrl,
       apiKey: provider.apiKey,
       apiFormat: provider.apiFormat ?? 'anthropic',
-      modelCapabilities: provider.modelCapabilities,
     }
   }
 

@@ -21,46 +21,9 @@ import { stripCacheControl } from './transform/cacheControlStrip.js'
 import { adaptThinkingInRequest, resolveThinkingStrategy } from './transform/thinkingAdapter.js'
 import { recordRequestForCacheSim, patchResponseUsage } from './cache/promptCacheSim.js'
 import { patchStreamCacheUsage } from './cache/streamCachePatch.js'
+import { getProxyModelCapabilities } from '../services/proxyModelCapabilities.js'
 
 const providerService = new ProviderService()
-
-/**
- * Anthropic-specific beta headers that have no meaning for OpenAI-compatible
- * providers. Sending these to non-Anthropic endpoints can cause 400 errors
- * or silently break prompt caching logic.
- */
-const ANTHROPIC_ONLY_BETA_HEADERS = new Set([
-  'claude-code-20250219',
-  'interleaved-thinking-2025-05-14',
-  'context-1m-2025-08-07',
-  'context-management-2025-06-27',
-  'structured-outputs-2025-12-15',
-  'prompt-caching-scope-2026-01-05',
-  'redact-thinking-2026-02-12',
-  'token-efficient-tools-2026-03-28',
-  'summarize-connector-text-2026-03-13',
-  'afk-mode-2026-01-31',
-  'cli-internal-2026-02-09',
-  'advisor-tool-2026-03-01',
-  'effort-2025-11-24',
-  'task-budgets-2026-03-13',
-  'fast-mode-2026-02-01',
-  'web-search-2025-03-05',
-  'advanced-tool-use-2025-11-20',
-  'tool-search-tool-2025-10-19',
-])
-
-/**
- * Filter the `anthropic-beta` header value, removing Anthropic-specific beta
- * headers that are not understood by OpenAI-compatible providers.
- * Returns the filtered header value, or undefined if nothing remains.
- */
-function filterAnthropicBetaHeader(rawHeader: string | null): string | undefined {
-  if (!rawHeader) return undefined
-  const betas = rawHeader.split(',').map(b => b.trim()).filter(Boolean)
-  const filtered = betas.filter(b => !ANTHROPIC_ONLY_BETA_HEADERS.has(b))
-  return filtered.length > 0 ? filtered.join(',') : undefined
-}
 
 export async function handleProxyRequest(req: Request, url: URL): Promise<Response> {
   const providerMatch = url.pathname.match(/^\/proxy\/providers\/([^/]+)\/v1\/messages$/)
@@ -121,28 +84,22 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
     )
   }
 
-  // Strip cache_control from the request body — OpenAI-compatible providers
-  // do not support Anthropic's prompt caching annotations.
+  // Performance optimizations: thinking adaptation, cache stripping, and cache simulation
+  const modelCaps = getProxyModelCapabilities(body.model)
+  const thinkingStrategy = resolveThinkingStrategy(body.model, modelCaps)
+  body = adaptThinkingInRequest(body, thinkingStrategy)
   body = stripCacheControl(body)
 
-  // Adapt thinking/reasoning based on model capabilities
-  const thinkingStrategy = resolveThinkingStrategy(body.model, config.modelCapabilities)
-  body = adaptThinkingInRequest(body, thinkingStrategy)
-
-  // Record request state for client-side cache simulation
   const cacheInfo = recordRequestForCacheSim(providerId, body)
 
   const isStream = body.stream === true
   const baseUrl = config.baseUrl.replace(/\/+$/, '')
 
-  // Filter anthropic-beta header for upstream request
-  const filteredBeta = filterAnthropicBetaHeader(req.headers.get('anthropic-beta'))
-
   try {
     if (config.apiFormat === 'openai_chat') {
-      return await handleOpenaiChat(body, baseUrl, config.apiKey, isStream, filteredBeta, providerId, cacheInfo)
+      return await handleOpenaiChat(body, baseUrl, config.apiKey, isStream, providerId, cacheInfo)
     } else {
-      return await handleOpenaiResponses(body, baseUrl, config.apiKey, isStream, filteredBeta, providerId, cacheInfo)
+      return await handleOpenaiResponses(body, baseUrl, config.apiKey, isStream, providerId, cacheInfo)
     }
   } catch (err) {
     console.error('[Proxy] Upstream request failed:', err)
@@ -164,25 +121,18 @@ async function handleOpenaiChat(
   baseUrl: string,
   apiKey: string,
   isStream: boolean,
-  filteredBeta?: string,
-  providerId?: string,
-  cacheInfo?: { isCacheHit: boolean },
+  providerId: string | undefined,
+  cacheInfo: { isCacheHit: boolean },
 ): Promise<Response> {
   const transformed = anthropicToOpenaiChat(body)
   const url = `${baseUrl}/v1/chat/completions`
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${apiKey}`,
-  }
-  // Forward any remaining (non-Anthropic-specific) beta headers
-  if (filteredBeta) {
-    headers['anthropic-beta'] = filteredBeta
-  }
-
   const upstream = await fetch(url, {
     method: 'POST',
-    headers,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
     body: JSON.stringify(transformed),
     signal: isStream ? AbortSignal.timeout(30_000) : AbortSignal.timeout(300_000),
   })
@@ -208,11 +158,10 @@ async function handleOpenaiChat(
         { status: 502 },
       )
     }
-    const anthropicStream = openaiChatStreamToAnthropic(upstream.body, body.model)
-    const patchedStream = cacheInfo
-      ? patchStreamCacheUsage(anthropicStream, cacheInfo)
-      : anthropicStream
-    return new Response(patchedStream, {
+    let anthropicStream = openaiChatStreamToAnthropic(upstream.body, body.model)
+    // Patch stream with simulated cache usage
+    anthropicStream = patchStreamCacheUsage(anthropicStream, cacheInfo)
+    return new Response(anthropicStream, {
       status: 200,
       headers: {
         'Content-Type': 'text/event-stream',
@@ -222,13 +171,11 @@ async function handleOpenaiChat(
     })
   }
 
-  // Non-streaming — patch usage with cache simulation
-  const responseBody = await upstream.json()
-  let anthropicResponse = openaiChatToAnthropic(responseBody, body.model)
-  if (cacheInfo) {
-    anthropicResponse = patchResponseUsage(providerId, body.model, anthropicResponse, cacheInfo)
-  }
-  return Response.json(anthropicResponse)
+  // Non-streaming
+  let responseBody = await upstream.json() as Record<string, unknown>
+  const anthropicResponse = openaiChatToAnthropic(responseBody, body.model)
+  const patchedResponse = patchResponseUsage(providerId, body.model, anthropicResponse, cacheInfo)
+  return Response.json(patchedResponse)
 }
 
 async function handleOpenaiResponses(
@@ -236,25 +183,18 @@ async function handleOpenaiResponses(
   baseUrl: string,
   apiKey: string,
   isStream: boolean,
-  filteredBeta?: string,
-  providerId?: string,
-  cacheInfo?: { isCacheHit: boolean },
+  providerId: string | undefined,
+  cacheInfo: { isCacheHit: boolean },
 ): Promise<Response> {
   const transformed = anthropicToOpenaiResponses(body)
   const url = `${baseUrl}/v1/responses`
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${apiKey}`,
-  }
-  // Forward any remaining (non-Anthropic-specific) beta headers
-  if (filteredBeta) {
-    headers['anthropic-beta'] = filteredBeta
-  }
-
   const upstream = await fetch(url, {
     method: 'POST',
-    headers,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
     body: JSON.stringify(transformed),
     signal: isStream ? AbortSignal.timeout(30_000) : AbortSignal.timeout(300_000),
   })
@@ -280,11 +220,10 @@ async function handleOpenaiResponses(
         { status: 502 },
       )
     }
-    const anthropicStream = openaiResponsesStreamToAnthropic(upstream.body, body.model)
-    const patchedStream = cacheInfo
-      ? patchStreamCacheUsage(anthropicStream, cacheInfo)
-      : anthropicStream
-    return new Response(patchedStream, {
+    let anthropicStream = openaiResponsesStreamToAnthropic(upstream.body, body.model)
+    // Patch stream with simulated cache usage
+    anthropicStream = patchStreamCacheUsage(anthropicStream, cacheInfo)
+    return new Response(anthropicStream, {
       status: 200,
       headers: {
         'Content-Type': 'text/event-stream',
@@ -294,11 +233,9 @@ async function handleOpenaiResponses(
     })
   }
 
-  // Non-streaming — patch usage with cache simulation
-  const responseBody = await upstream.json()
-  let anthropicResponse = openaiResponsesToAnthropic(responseBody, body.model)
-  if (cacheInfo) {
-    anthropicResponse = patchResponseUsage(providerId, body.model, anthropicResponse, cacheInfo)
-  }
-  return Response.json(anthropicResponse)
+  // Non-streaming
+  let responseBody = await upstream.json() as Record<string, unknown>
+  const anthropicResponse = openaiResponsesToAnthropic(responseBody, body.model)
+  const patchedResponse = patchResponseUsage(providerId, body.model, anthropicResponse, cacheInfo)
+  return Response.json(patchedResponse)
 }

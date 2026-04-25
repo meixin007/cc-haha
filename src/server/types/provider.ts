@@ -21,23 +21,6 @@ export const ModelMappingSchema = z.object({
   opus: z.string(),
 })
 
-/**
- * Per-model capability overrides for non-Anthropic providers.
- * When present, these take precedence over the hardcoded Anthropic defaults
- * used by getContextWindowForModel / getModelMaxOutputTokens.
- */
-export const ModelCapabilitiesSchema = z.object({
-  /** Maximum input context window in tokens */
-  contextWindow: z.number().positive().optional(),
-  /** Maximum output tokens the model can generate */
-  maxOutputTokens: z.number().positive().optional(),
-  /** Whether the model supports thinking/reasoning output */
-  supportsThinking: z.boolean().optional(),
-  /** Whether the model supports interleaved thinking */
-  supportsInterleavedThinking: z.boolean().optional(),
-})
-export type ModelCapabilities = z.infer<typeof ModelCapabilitiesSchema>
-
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
@@ -47,7 +30,6 @@ export const SavedProviderSchema = z.object({
   apiFormat: ApiFormatSchema.default('anthropic'),
   models: ModelMappingSchema,
   notes: z.string().optional(),
-  modelCapabilities: ModelCapabilitiesSchema.optional(),
 })
 
 export const ProvidersIndexSchema = z.object({
@@ -63,7 +45,6 @@ export const CreateProviderSchema = z.object({
   apiFormat: ApiFormatSchema.default('anthropic'),
   models: ModelMappingSchema,
   notes: z.string().optional(),
-  modelCapabilities: ModelCapabilitiesSchema.optional(),
 })
 
 export const UpdateProviderSchema = z.object({
@@ -73,7 +54,6 @@ export const UpdateProviderSchema = z.object({
   apiFormat: ApiFormatSchema.optional(),
   models: ModelMappingSchema.optional(),
   notes: z.string().optional(),
-  modelCapabilities: ModelCapabilitiesSchema.optional(),
 })
 
 export const TestProviderSchema = z.object({

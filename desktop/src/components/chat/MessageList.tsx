@@ -118,6 +118,15 @@ type MessageListProps = {
   sessionId?: string | null
 }
 
+const AUTO_SCROLL_BOTTOM_THRESHOLD_PX = 48
+
+function isNearScrollBottom(element: HTMLElement) {
+  return (
+    element.scrollHeight - element.scrollTop - element.clientHeight <=
+    AUTO_SCROLL_BOTTOM_THRESHOLD_PX
+  )
+}
+
 export function MessageList({ sessionId }: MessageListProps = {}) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const resolvedSessionId = sessionId ?? activeTabId
@@ -136,7 +145,10 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
   const streamingText = sessionState?.streamingText ?? ''
   const activeThinkingId = sessionState?.activeThinkingId ?? null
   const agentTaskNotifications = sessionState?.agentTaskNotifications ?? {}
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const shouldAutoScrollRef = useRef(true)
+  const lastSessionIdRef = useRef<string | null | undefined>(resolvedSessionId)
   const t = useTranslation()
   const [rewindTarget, setRewindTarget] = useState<{
     userMessageIndex: number
@@ -148,9 +160,22 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
   const [isLoadingPreview, setIsLoadingPreview] = useState(false)
   const [isExecutingRewind, setIsExecutingRewind] = useState(false)
 
+  const updateAutoScrollState = useCallback(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    shouldAutoScrollRef.current = isNearScrollBottom(container)
+  }, [])
+
   useEffect(() => {
+    if (lastSessionIdRef.current !== resolvedSessionId) {
+      shouldAutoScrollRef.current = true
+      lastSessionIdRef.current = resolvedSessionId
+    }
+
+    if (!shouldAutoScrollRef.current) return
+
     bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' })
-  }, [messages.length, streamingText])
+  }, [messages.length, resolvedSessionId, streamingText])
 
   useEffect(() => {
     if (!resolvedSessionId || !rewindTarget) return
@@ -268,7 +293,11 @@ export function MessageList({ sessionId }: MessageListProps = {}) {
   let visibleUserMessageIndex = -1
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-4">
+    <div
+      ref={scrollContainerRef}
+      onScroll={updateAutoScrollState}
+      className="flex-1 overflow-y-auto px-4 py-4"
+    >
       <div className="mx-auto max-w-[860px]">
         {renderItems.map((item) => {
           if (item.kind === 'tool_group') {

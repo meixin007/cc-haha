@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const check = vi.fn()
 const relaunch = vi.fn()
+const invoke = vi.fn()
 
 vi.mock('@tauri-apps/plugin-updater', () => ({
   check,
@@ -11,10 +12,15 @@ vi.mock('@tauri-apps/plugin-process', () => ({
   relaunch,
 }))
 
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke,
+}))
+
 describe('updateStore', () => {
   beforeEach(() => {
     check.mockReset()
     relaunch.mockReset()
+    invoke.mockReset()
     window.localStorage.clear()
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
@@ -89,20 +95,23 @@ describe('updateStore', () => {
     expect(useUpdateStore.getState().shouldPrompt).toBe(true)
   })
 
-  it('computes download progress from content length and relaunches after install', async () => {
-    const downloadAndInstall = vi.fn(async (onEvent?: (event: unknown) => void) => {
+  it('downloads, stops sidecars, installs, and relaunches', async () => {
+    const download = vi.fn(async (onEvent?: (event: unknown) => void) => {
       onEvent?.({ event: 'Started', data: { contentLength: 200 } })
       onEvent?.({ event: 'Progress', data: { chunkLength: 50 } })
       onEvent?.({ event: 'Progress', data: { chunkLength: 150 } })
       onEvent?.({ event: 'Finished' })
     })
+    const install = vi.fn().mockResolvedValue(undefined)
 
     check.mockResolvedValue({
       version: '0.2.0',
       body: 'Notes',
-      downloadAndInstall,
+      download,
+      install,
       close: vi.fn().mockResolvedValue(undefined),
     })
+    invoke.mockResolvedValue(undefined)
     relaunch.mockResolvedValue(undefined)
 
     vi.resetModules()
@@ -111,7 +120,14 @@ describe('updateStore', () => {
     await useUpdateStore.getState().checkForUpdates()
     await useUpdateStore.getState().installUpdate()
 
-    expect(downloadAndInstall).toHaveBeenCalledTimes(1)
+    expect(download).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('prepare_for_update_install')
+    expect(install).toHaveBeenCalledTimes(1)
+    const prepareCallOrder = invoke.mock.invocationCallOrder[0]
+    const installCallOrder = install.mock.invocationCallOrder[0]
+    expect(prepareCallOrder).toBeDefined()
+    expect(installCallOrder).toBeDefined()
+    expect(prepareCallOrder!).toBeLessThan(installCallOrder!)
     expect(useUpdateStore.getState().progressPercent).toBe(100)
     expect(useUpdateStore.getState().status).toBe('restarting')
     expect(relaunch).toHaveBeenCalledTimes(1)
